@@ -17,20 +17,24 @@ from utils.aa_info_util import init_res_name_map
 from utils.aa_info_util import init_atom_num_map
 from utils.aa_info_util import init_atom_name_map
 from utils.generate_pdb import generate_pdb, write_pdb
+from all_atom_fold.add_force_label import add_data_force_label
+from all_atom_fold.energy_minimizer import Energy_Minimizer
 warnings.filterwarnings("ignore")
 
+import collections
 
-def data_builder(args, data_path, test_mode):
+
+def data_builder(args, data_path, test_flag):
     '''build data loader
 
     Input:
         - args(object):arguments
         - data_path(str):test data path
-        - test_mode(str):test or train mode
+        - test_flag(str):test or train mode
     Output:
         - test_loader(torch.dataloader):test dataloader
     '''
-    dataset = Protein_Dataset(data_path, test_mode)
+    dataset = Protein_Dataset(data_path, test_flag)
     args.num_classes = dataset.data_num_classes
     args.num_features = dataset.data_num_features
     test_loader = DataLoader(dataset,batch_size=1,shuffle=False)
@@ -194,7 +198,7 @@ def compute_sub_out_coor(data, model, res_begin_idx, res_end_idx,
 
 
     with torch.no_grad():
-        out_coor, logit_s = model(sub_data)
+        out_coor, _, logit_s = model(sub_data, test_flag=True)
     out_coor = trans_and_rotate_coor(out_coor.reshape(-1, 3, 3), logit_s)
 
     del sub_edge_index
@@ -261,7 +265,30 @@ def process_overlong_seq(data, model, standard_len = 300, rest_len = 70):
 
     return torch.cat(out_coor_list, dim=0)
 
-def test(args, model, loader, file_path, write_path, standard_len=900, rest_len=70):
+def add_side_chain_atom(protein_name, residue_name_list, 
+                        atom_name_list, pred_coor_list):
+    '''add side chain structure and folding
+
+    Input:
+        - protein_name(str): the PDB code of protein
+        - residue_name_list(list): the list of residue names
+        - atom_name_list(list): the list of atom names
+        - pred_coor_list(list): the list of predicted coordinates
+    Output:
+        - all_atom_coor_list(list): the list of all atom coordinates
+        - all_atom_name_list(list): the list of all atom names 
+        - all_res_name_list(list): the list of all residue names 
+        - all_res_index_list(list): the list of all residue indices
+    '''
+    all_atom_data = add_data_force_label(protein_name, residue_name_list, 
+                        atom_name_list, pred_coor_list)
+    data, all_atom_name_list, all_res_name_list, all_res_index_list = all_atom_data
+    minimizer = Energy_Minimizer(10, 10)
+    all_atom_coor_list = minimizer.minimize(data)
+
+    return all_atom_coor_list, all_atom_name_list, all_res_name_list, all_res_index_list
+
+def test(args, model, loader, file_path, write_path, generate_mode='all_atom', standard_len=900, rest_len=70):
     '''test function
 
     Input:
@@ -291,7 +318,7 @@ def test(args, model, loader, file_path, write_path, standard_len=900, rest_len=
             out_coor = process_overlong_seq(data, model, standard_len, rest_len)
         else:
             with torch.no_grad():
-                out_coor, logit_s = model(data)
+                out_coor, _, logit_s = model(data, test_flag=True)
 
 
             if args.dataset[-1] == '/':
@@ -304,10 +331,20 @@ def test(args, model, loader, file_path, write_path, standard_len=900, rest_len=
             if dataset_name != "Antibody_data":
                 out_coor = trans_and_rotate_coor(out_coor.reshape(-1, 3, 3), logit_s)
 
+
+
         fasta_str, atom_name_list = generate_fasta_and_atom_name(file_path, protein_name)
         residue_name_list, residue_index_list = generate_residue_name(fasta_str, name_map, atom_num_map)
         pred_coor_list = out_coor.tolist()
-        pdb_file_list = generate_pdb(atom_name_list, pred_coor_list, residue_name_list, residue_index_list)
+
+        if generate_mode == 'all_atom':
+            print('all atom folding...')
+            all_atom_result = add_side_chain_atom(protein_name, residue_name_list, atom_name_list, pred_coor_list)
+            all_atom_coor_list, all_atom_name_list, all_res_name_list, all_res_index_list = all_atom_result
+            pdb_file_list = generate_pdb(all_atom_name_list, all_atom_coor_list, all_res_name_list, all_res_index_list)
+        else:
+            pdb_file_list = generate_pdb(atom_name_list, pred_coor_list, residue_name_list, residue_index_list)
+
 
         new_write_path = os.path.join(write_path, protein_name+"_pred_result.pdb")
         write_pdb(pdb_file_list, new_write_path)
@@ -325,16 +362,33 @@ def test_main_func():
     torch.manual_seed(args.seed)
 
     #device selection
-    args.device = 'cpu'
-    test_mode = True
+    if torch.cuda.is_available():
+        args.device = 'cuda'
+    else:
+        args.device = 'cpu'
+    test_flag = True
 
     if not os.path.exists(args.wdir):
         os.mkdir(args.wdir)
   
     model = Predict_Network(args).to(args.device)
-    model.load_state_dict(torch.load(args.mdir))
-    test_loader = data_builder(args, args.dataset, test_mode)
-    test(args, model, test_loader, args.dataset, args.wdir)
+    model_state_dict = torch.load(args.mdir)
+
+    name_mapping = {
+        'build_graph_model.residue_graph_network.conv1.lin_l.weight': 'build_graph_model.residue_graph_network.conv1.lin_rel.weight',
+        'build_graph_model.residue_graph_network.conv1.lin_l.bias': 'build_graph_model.residue_graph_network.conv1.lin_rel.bias',
+        'build_graph_model.residue_graph_network.conv1.lin_r.weight': 'build_graph_model.residue_graph_network.conv1.lin_root.weight',
+        'build_graph_model.residue_graph_network.conv2.lin_l.weight': 'build_graph_model.residue_graph_network.conv2.lin_rel.weight',
+        'build_graph_model.residue_graph_network.conv2.lin_l.bias': 'build_graph_model.residue_graph_network.conv2.lin_rel.bias',
+        'build_graph_model.residue_graph_network.conv2.lin_r.weight': 'build_graph_model.residue_graph_network.conv2.lin_root.weight',
+        'build_graph_model.residue_graph_network.conv3.lin_l.weight': 'build_graph_model.residue_graph_network.conv3.lin_rel.weight',
+        'build_graph_model.residue_graph_network.conv3.lin_l.bias': 'build_graph_model.residue_graph_network.conv3.lin_rel.bias',
+        'build_graph_model.residue_graph_network.conv3.lin_r.weight': 'build_graph_model.residue_graph_network.conv3.lin_root.weight'}
+    model_state_dict = {name_mapping.get(k, k): v for k, v in model_state_dict.items()}
+
+    model.load_state_dict(model_state_dict)
+    test_loader = data_builder(args, args.dataset, test_flag)
+    test(args, model, test_loader, args.dataset, args.wdir, generate_mode=args.test_mode)
 
 
 

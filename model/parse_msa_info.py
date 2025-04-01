@@ -1,6 +1,7 @@
 '''
 process with protein msa and template information
 '''
+import random
 import torch
 import torch.nn as nn
 
@@ -148,13 +149,14 @@ class msa_parser(nn.Module):
                                             performer_L_opts=args.performer_L_opts, performer_N_opts=args.performer_N_opts, 
                                             use_templ=args.use_templ, device_type=args.device, SE3_param=self.SE3_param)
 
-    def forward(self, msa, xyz_t, t1d, t0d):
+    def forward(self, msa, xyz_t, t1d, t0d, test_flag):
         '''
         Input:
             - msa(tensor):msa information
             - xyz_t(tensor):template backbone atom 3d position
             - t1d(tensor):template 1d information
             - t0d(tensor):template 0d information
+            - test_flag(boolean):determine training process or testing process
         Output:
             - msa(tensor):processed msa information
             - prob_s(tensor):residue pair distance and angle classes
@@ -178,11 +180,25 @@ class msa_parser(nn.Module):
         t2d = xyz_to_t2d(xyz_t, t0d)
 
         idx_pdb = torch.arange(L).long().expand((B, L))
-        msa = msa[:,:100]
         seq = msa[:,0]
         idx_pdb = idx_pdb
         t1d = t1d[:,:10]
         t2d = t2d[:,:10]
+
+        
+        if not test_flag:
+            rand_flag = random.random()
+            if msa.shape[1]>1 and rand_flag > 0.7:
+                msa_num = msa.shape[1]-1
+                k = random.randint(1, min(msa_num, 100))
+                msa_idx = torch.tensor(random.sample(range(msa_num), k),device=msa.device)
+                sub_msa = msa[:, 1:, :]
+                sub_msa = sub_msa[:, msa_idx, :].view(1, -1, msa.shape[-1])
+                msa = torch.cat([msa[:, 0, :].unsqueeze(0), sub_msa], dim=1)
+            else:
+                msa = msa[:,:100]
+        else:
+            msa = msa[:,:100]        
 
         msa, prob_s, logits, seq1hot, idx = self.model(msa, seq, idx_pdb, t1d=t1d, t2d=t2d)
 

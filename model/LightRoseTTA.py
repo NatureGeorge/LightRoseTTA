@@ -21,18 +21,19 @@ class Predict_Network(nn.Module):
         self.build_graph_model = Build_Graph_Network(args)
         self.refine_model = Refine_Network(args)
 
-    def forward(self, data):
+    def forward(self, data, test_flag):
         '''main framework
 
         Input:
             - data(object):input graph data
+            - test_flag(boolean):determine training process or testing process
         Output:
             - xyz(tensor): atom 3d position
             - model_lddt(tensor):residue sequence LDDT
             - logits(tensor):residue pair distance and torsion angles
         '''
         # extract msa feature
-        msa, prob_s, logits, seq1hot, idx = self.parse_msa_model(data.msa, data.xyz_t, data.t1d, data.t0d)
+        msa, prob_s, logits, seq1hot, idx = self.parse_msa_model(data.msa, data.xyz_t, data.t1d, data.t0d, test_flag)
 
         # build protein graph and get backbone position
         bb_xyz, bb_state, node, edge = self.build_graph_model(data, msa, prob_s, seq1hot, idx)
@@ -50,7 +51,7 @@ class Predict_Network(nn.Module):
         del edge
 
         torch.cuda.empty_cache()
-        return xyz, logits
+        return xyz, model_lddt, logits
 
 
 

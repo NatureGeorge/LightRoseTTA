@@ -274,7 +274,7 @@ def parse_templates(ffdb, hhr_fn, atab_fn, n_templ=10):
         return None, None, None, None, None
 
     xyz = np.vstack(xyz).astype(np.float32)
-    qmap = np.vstack(qmap).astype(np.long)
+    qmap = np.vstack(qmap).astype(np.longlong)
     f0d = np.vstack(f0d).astype(np.float32)
     f1d = np.vstack(f1d).astype(np.float32)
         

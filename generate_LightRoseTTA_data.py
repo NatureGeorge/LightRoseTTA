@@ -22,7 +22,7 @@ def preprocess_data(fasta_path, write_base_path,
         os.mkdir(write_path)
 	    
     if os.path.exists(os.path.join(write_base_path, 'processed')):
-	return
+        return
 	    
     seq_search_db = os.path.join(seq_db_base_path, "UniRef30_2020_06")
     templ_search_db = os.path.join(templ_db_base_path, "pdb100_2021Mar03")

@@ -12,6 +12,8 @@ parser.add_argument('-mdir', type=str, default='weights/LightRoseTTA.pth',
                     help='folder with the trained model file')
 parser.add_argument('-wdir', type=str, default='predict_pdb', 
                     help='folder of the output files')
+parser.add_argument('-test_mode', type=str, default='backbone', 
+                    help='predict backbone or all atom structure')
 parser.add_argument('--nhid', type=int, default=64,
                     help='hidden size')
 parser.add_argument('--batch_size', type=int, default=1,
